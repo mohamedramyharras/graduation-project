@@ -389,18 +389,19 @@ def slide_05_hardware(prs):
     spec_data = [
         ["Component", "Specification"],
         ["Hand", "InMoov 3D-printed (PLA)"],
-        ["Actuators", "Linear actuators + nylon strings"],
-        ["Controller", "Arduino Mega 2560"],
+        ["Actuators", "5\u00d7 linear actuators + nylon strings"],
+        ["Inference Board", "Raspberry Pi 3 (ARMv8, 1.2 GHz)"],
+        ["ADC + Actuator MCU", "Arduino Mega 2560"],
         ["EMG Sensors", "2\u00d7 MyoWare 2.0"],
         ["Channels", "2 (ECRB Ch5, ECU Ch3)"],
-        ["Sampling Rate", "200 Hz (Myo armband)"],
+        ["Sampling Rate", "200 Hz (Myo armband dataset)"],
         ["Model Size", "23,809 parameters"],
     ]
     make_table(
-        slide, 8, 2,
-        Inches(7.5), Inches(1.4), Inches(5.3), Inches(5.2),
+        slide, 9, 2,
+        Inches(7.5), Inches(1.4), Inches(5.3), Inches(5.7),
         spec_data, font_size=15,
-        col_widths=[Inches(2.2), Inches(3.1)],
+        col_widths=[Inches(2.4), Inches(2.9)],
     )
 
 
@@ -838,15 +839,15 @@ def slide_16_literature(prs):
 
 
 def slide_17_deployment(prs):
-    """Slide 17 -- Embedded Deployment."""
+    """Slide 17 -- Embedded Deployment (Pi 3 + Arduino)."""
     slide = prs.slides.add_slide(prs.slide_layouts[6])
     set_slide_bg(slide)
-    add_title_bar(slide, "Embedded Deployment: Arduino Mega 2560")
+    add_title_bar(slide, "Real-Time Deployment: Raspberry Pi 3 + Arduino Mega")
 
-    # Left: pseudocode box
+    # Left: pseudocode box (Pi 3 side)
     code_box = slide.shapes.add_shape(
-        MSO_SHAPE.ROUNDED_RECTANGLE, Inches(0.5), Inches(1.4),
-        Inches(6.2), Inches(5.2),
+        MSO_SHAPE.ROUNDED_RECTANGLE, Inches(0.4), Inches(1.4),
+        Inches(6.4), Inches(5.2),
     )
     code_box.fill.solid()
     code_box.fill.fore_color.rgb = RGBColor(0x0D, 0x14, 0x26)
@@ -857,52 +858,68 @@ def slide_17_deployment(prs):
     CODE_TEXT = RGBColor(0xD4, 0xD4, 0xD4)
 
     code_lines = [
-        ("// Arduino Real-Time Inference Loop", {"font_size": 14, "color": GREEN}),
+        ("# Raspberry Pi 3 — inference_stream.py", {"font_size": 13, "color": GREEN}),
         ("", {"font_size": 6}),
-        ("void loop() {", {"font_size": 15, "color": ACCENT_COLOR}),
-        ("  // 1. Read 2 analog EMG channels", {"font_size": 13, "color": GREEN}),
-        ("  float ch5 = analogRead(A0) / 1023.0;", {"font_size": 15}),
-        ("  float ch3 = analogRead(A1) / 1023.0;", {"font_size": 15}),
+        ("model = GRUForcePredictor(...)", {"font_size": 14, "color": ACCENT_COLOR}),
+        ("model.load_state_dict(checkpoint)", {"font_size": 14}),
         ("", {"font_size": 6}),
-        ("  // 2. Extract 36-D features from window", {"font_size": 13, "color": GREEN}),
-        ("  extract_features(ch5, ch3, features);", {"font_size": 15}),
+        ("while True:", {"font_size": 14, "color": ACCENT_COLOR}),
+        ("  # 1. Read raw ADC from Arduino", {"font_size": 12, "color": GREEN}),
+        ("  ch1, ch2 = ser.read_line()  # 2 kHz", {"font_size": 14}),
         ("", {"font_size": 6}),
-        ("  // 3. Run GRU forward pass", {"font_size": 13, "color": GREEN}),
-        ("  float force = gru_inference(features);", {"font_size": 15}),
+        ("  # 2. Compute 36-D feature vector", {"font_size": 12, "color": GREEN}),
+        ("  feats = extract_features(window)", {"font_size": 14}),
+        ("  vec36 = delta_augment(feat_history)", {"font_size": 14}),
         ("", {"font_size": 6}),
-        ("  // 4. Map force to actuator position", {"font_size": 13, "color": GREEN}),
-        ("  int pos = map(force, 0.0, 1.0, 0, 180);", {"font_size": 15}),
-        ("  actuator.write(pos);", {"font_size": 15}),
-        ("}", {"font_size": 15, "color": ACCENT_COLOR}),
+        ("  # 3. GRU inference (~20-30 ms)", {"font_size": 12, "color": GREEN}),
+        ("  with torch.no_grad():", {"font_size": 14}),
+        ("    force = model(seq_tensor).item()", {"font_size": 14}),
+        ("", {"font_size": 6}),
+        ("  # 4. Send to Arduino", {"font_size": 12, "color": GREEN}),
+        ("  ser.write(f'F,{force:.4f}')", {"font_size": 14}),
     ]
     add_multiline_textbox(
-        slide, Inches(0.7), Inches(1.55), Inches(5.8), Inches(4.9),
-        code_lines, font_size=15, color=CODE_TEXT,
-        line_spacing_factor=1.15,
+        slide, Inches(0.6), Inches(1.55), Inches(6.0), Inches(4.9),
+        code_lines, font_size=14, color=CODE_TEXT,
+        line_spacing_factor=1.12,
     )
 
-    # Right: deployment specs table
-    deploy_data = [
-        ["Metric", "Value"],
-        ["Microcontroller", "ATmega2560 (16 MHz)"],
-        ["Flash Memory", "256 KB (model < 100 KB)"],
-        ["SRAM", "8 KB"],
-        ["Inference Latency", "< 30 ms per window"],
-        ["Total Loop Time", "< 50 ms (20 Hz update)"],
-        ["Model Parameters", "23,809 (float32)"],
-        ["Power Consumption", "~500 mW (board + sensors)"],
+    # Right: architecture + specs table
+    arch = [
+        ("Split-Processing Architecture:", {"bold": True, "font_size": 18, "color": ACCENT_COLOR}),
+        "",
+        "\u2022  Arduino Mega 2560",
+        "     \u2013  Samples 2 EMG channels at 2 kHz (ADC)",
+        "     \u2013  Streams raw values to Pi over USB serial",
+        "     \u2013  Receives force [0,1] and drives PWM",
+        "",
+        "\u2022  Raspberry Pi 3  (ARMv8, 1.2 GHz)",
+        "     \u2013  Feature extraction (numpy, ~2 ms)",
+        "     \u2013  GRU inference  (PyTorch, ~20\u201330 ms)",
+        "     \u2013  Butterworth smoothing (4 Hz)",
+        "",
+    ]
+    add_multiline_textbox(
+        slide, Inches(7.1), Inches(1.4), Inches(5.8), Inches(3.2),
+        arch, font_size=16, color=TEXT_COLOR, line_spacing_factor=1.2,
+    )
+
+    # Latency table
+    lat_data = [
+        ["Step", "Latency"],
+        ["ADC + serial to Pi", "~2 ms"],
+        ["Feature extraction", "~2 ms"],
+        ["GRU inference (Pi 3)", "~20\u201330 ms"],
+        ["Serial back to Arduino", "~3 ms"],
+        ["\u2023 Total end-to-end", "~45\u201355 ms"],
+        ["Update rate", "20\u201325 Hz"],
+        ["Acceptable threshold", "100\u2013300 ms"],
     ]
     make_table(
         slide, 8, 2,
-        Inches(7.2), Inches(1.5), Inches(5.6), Inches(4.5),
-        deploy_data, font_size=15,
-        col_widths=[Inches(2.4), Inches(3.2)],
-    )
-
-    add_textbox(
-        slide, Inches(7.2), Inches(6.2), Inches(5.6), Inches(0.8),
-        "PyTorch weights exported as C float arrays for Arduino compilation",
-        font_size=15, color=MUTED_TEXT, alignment=PP_ALIGN.CENTER,
+        Inches(7.1), Inches(4.7), Inches(5.8), Inches(1.95),
+        lat_data, font_size=14,
+        col_widths=[Inches(3.2), Inches(2.6)],
     )
 
 

@@ -170,27 +170,30 @@ The proposed system comprises four subsystems connected in a closed loop
 
 \begin{enumerate}
 \item \textbf{EMG Acquisition.}  Two MyoWare~2.0 muscle sensors are placed
-  over the ECRB and ECU muscles on the posterior forearm.  Raw sEMG is
-  sampled at 2\,000~Hz by the Arduino's analog-to-digital converter.
-\item \textbf{Signal Processing and Feature Extraction.}  A root-mean-square
-  (RMS) envelope is computed every 25~ms, and six time-domain features
-  (RMS, MAV, WL, VAR, ZC, SSC) augmented with first- and second-order
-  temporal differences ($\Delta$, $\Delta\Delta$) produce a 36-dimensional
-  feature vector per time step.
+  over the ECRB and ECU muscles on the posterior forearm.  An Arduino
+  Mega~2560 samples both channels through its 10-bit ADC at 2\,000~Hz and
+  streams raw values over USB serial to the companion inference board.
+\item \textbf{Signal Processing and Feature Extraction.}  A Raspberry
+  Pi~3 receives the raw EMG stream and computes a 100~ms sliding-window
+  RMS envelope every 20~ms (80\% overlap), then extracts six time-domain
+  features per channel augmented with first- and second-order temporal
+  differences, producing a 36-dimensional feature vector per hop.
 \item \textbf{GRU Neural Network.}  A pre-trained, subject-independent GRU
-  model (23\,809 parameters) takes 50 consecutive feature vectors (1~s of
-  context) and outputs a normalized grip force estimate in the range
-  $[0, 1]$.
-\item \textbf{Actuator Control.}  The predicted force is mapped to PWM
-  duty cycles driving five linear actuators connected to nylon tendon
-  strings threaded through the InMoov hand's finger channels.  A per-finger
-  gain array controls the relative closure of each digit during power grip.
+  model (23\,809 parameters) running on the Raspberry Pi~3 under PyTorch
+  takes 50 consecutive feature vectors (1~s of context) and outputs a
+  normalized grip force estimate in the range $[0, 1]$.
+\item \textbf{Actuator Control.}  The force estimate is sent back to the
+  Arduino Mega over serial.  The Arduino maps it to PWM duty cycles driving
+  five linear actuators connected to nylon tendon strings threaded through
+  the InMoov hand's finger channels.  A per-finger gain array controls the
+  relative closure of each digit during power grip.
 \end{enumerate}
 
 \noindent\textbf{Hardware components:}
 InMoov hand (PLA, FDM 3D-printed), five linear actuators with nylon
-strings, Arduino Mega~2560, two MyoWare~2.0 sEMG sensors, and an HC-05
-Bluetooth module for optional over-the-air calibration.
+strings, Arduino Mega~2560 (ADC and actuator control), Raspberry Pi~3
+(inference), two MyoWare~2.0 sEMG sensors, and an HC-05 Bluetooth module
+for optional over-the-air gain calibration.
 
 % ────────────────────────────────────────────────────────────────────────────
 \section{Forearm Anatomy and Electrode Placement}
@@ -648,13 +651,20 @@ individuals with varying forearm morphology and electrode impedance.
 \subsection{Embedded Deployment Considerations}
 
 The 23\,809-parameter GRU model occupies approximately 93~KB in 32-bit
-floating point, fitting within the Arduino Mega's 256~KB flash memory.
-Inference for a single 50-step sequence requires approximately 24\,000
-multiply-accumulate operations, completing in under 5~ms on an 8-bit AVR
-at 16~MHz.  Combined with the 25~ms feature extraction window, the total
-system latency is approximately 30~ms---well below the 100--300~ms
-acceptable delay for prosthetic force control
-\cite{scheme2011electromyogram}.
+float---trivially small relative to the Raspberry Pi~3's 1~GB RAM.
+GRU inference on the Pi~3 (ARM Cortex-A53, 1.2~GHz, four cores)
+under PyTorch requires approximately 20--30~ms per 50-step sequence,
+as the model performs roughly $\sim$1~million multiply-accumulate
+operations per call (50~timesteps $\times$ 3~gates $\times$
+$(36 + 64) \times 64$ weights).  Combined with 20~ms feature
+extraction and $\lesssim5$~ms serial round-trip, the total
+end-to-end latency is approximately \textbf{45--55~ms}, yielding a
+commanded-force update rate of 20--25~Hz.  This is well below the
+100--300~ms perceptible delay threshold for prosthetic force
+control~\cite{scheme2011electromyogram}.  The split-processing
+architecture---Arduino Mega~2560 for real-time ADC sampling and PWM
+actuation, Raspberry Pi~3 for inference---exploits the strengths of
+both platforms while keeping total component cost below \$50.
 
 \subsection{Comparison with Ghorbani et al.}
 
