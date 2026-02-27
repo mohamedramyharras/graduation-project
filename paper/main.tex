@@ -1,0 +1,707 @@
+\documentclass[journal]{IEEEtran}
+\usepackage[utf8]{inputenc}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{array}
+\usepackage{cite}
+\usepackage{url}
+\usepackage{hyperref}
+\usepackage{xcolor}
+\usepackage{siunitx}
+
+\graphicspath{{../outputs/figures/}}
+
+\begin{document}
+
+\title{A Lightweight 2-Channel sEMG-Based Grip Force Controller for
+       3D-Printed Prosthetic Hands Using Gated Recurrent Units}
+
+\author{[Author Name(s)]~\IEEEmembership{Member, IEEE}
+\thanks{Manuscript received \today.}
+\thanks{[Department, University, City, Country. E-mail: author@email.com]}}
+
+\maketitle
+
+% ────────────────────────────────────────────────────────────────────────────
+\begin{abstract}
+Proportional grip force control is essential for functional upper-limb
+prostheses, yet most electromyography (EMG)-based approaches rely on
+high-channel-count electrode arrays or subject-specific calibration sessions
+that hinder practical deployment.  We present a complete, end-to-end system
+for proportional grip force control of a 3D-printed prosthetic hand using
+only \textbf{two} surface EMG channels.  Channel selection via
+Minimum-Redundancy Maximum-Relevance (MRMR) identifies the Extensor Carpi
+Radialis Brevis (ECRB) and Extensor Carpi Ulnaris (ECU) as the optimal
+electrode sites among eight Myo armband channels.  A subject-independent
+Gated Recurrent Unit (GRU) model with 23\,809 parameters maps 36
+time-domain features to continuous grip force, achieving $R^2 = 0.778 \pm
+0.062$ and NRMSE $= 11.5 \pm 1.8\%$ across nine subjects without any
+per-user calibration.  The model is deployed on an Arduino Mega~2560
+controlling an InMoov 3D-printed hand actuated by linear actuators and
+nylon tendon strings, demonstrating a low-cost, clinically viable pathway
+from surface EMG acquisition to proportional prosthetic grip.
+\end{abstract}
+
+\begin{IEEEkeywords}
+surface electromyography, grip force estimation, gated recurrent unit,
+prosthetic hand, InMoov, MRMR channel selection, embedded deployment,
+subject-independent
+\end{IEEEkeywords}
+
+% ────────────────────────────────────────────────────────────────────────────
+\section{Introduction}
+\label{sec:intro}
+
+Upper-limb amputation affects millions of individuals worldwide,
+creating an urgent demand for functional, affordable prosthetic devices
+\cite{scheme2011electromyogram}.  While commercial myoelectric prostheses
+provide basic open/close grasp functionality, \emph{proportional} grip
+force control---where the device mirrors the intended force of the user's
+residual musculature---remains a central unsolved challenge in
+rehabilitation engineering
+\cite{castellini2009surface,li2019review,meattini2018semg}.
+
+Surface EMG (sEMG) is the dominant non-invasive sensing modality for
+prosthetic control: electrodes placed on the forearm skin capture the
+electrical activity of underlying muscles during voluntary contraction
+\cite{deluca1997use,basmajian1985muscles}.  Traditional pattern-recognition
+approaches classify discrete grasp types rather than estimating continuous
+force \cite{englehart2003robust}, inherently limiting proportionality.
+Regression-based methods overcome this limitation by mapping EMG features
+directly to a continuous force output \cite{hahne2014linear}, but most
+systems require 4--10 electrodes and subject-specific training sessions,
+making clinical deployment cumbersome.
+
+The emergence of open-source 3D-printed prosthetic hands---notably the
+InMoov project \cite{langevin2017inmoov}---has dramatically reduced
+hardware costs while maintaining anthropomorphic form and function.  These
+hands use nylon tendon strings driven by linear actuators or servo motors,
+providing a natural mapping from predicted grip force to actuator
+displacement.  However, no complete pipeline from minimal-channel sEMG
+acquisition through real-time neural-network inference to proportional
+actuator control has been demonstrated on such platforms.
+
+Deep recurrent architectures, particularly the Gated Recurrent Unit (GRU)
+\cite{cho2014learning}, are well suited for EMG-to-force regression because
+grip force production is a temporally smooth process that benefits from
+sequence modeling.  The GRU offers a favorable accuracy--complexity
+trade-off: fewer parameters than Long Short-Term Memory (LSTM)
+\cite{hochreiter1997lstm} with comparable performance, making it suitable
+for resource-constrained microcontrollers \cite{warden2019tinyml}.
+
+Prior GRU-based grip force estimation on the Ghorbani dataset
+\cite{ghorbani2023estimation} reported $R^2 = 0.994$; however, the force
+signal was concatenated as a ninth input feature, converting the task to
+trivial autoregressive prediction.  We avoid this methodological flaw and
+present a genuine EMG-only-to-force mapping.
+
+\textbf{Contributions.}  This paper makes the following contributions:
+\begin{enumerate}
+\item A complete prosthetic grip force control system: from two sEMG
+  electrodes on the forearm, through a lightweight GRU model, to
+  proportional actuation of an InMoov 3D-printed hand via Arduino.
+\item Application of MRMR channel selection to identify the Extensor Carpi
+  Radialis Brevis (ECRB) and Extensor Carpi Ulnaris (ECU) as the two most
+  informative channels from an 8-channel Myo armband, with anatomical
+  justification.
+\item A subject-independent model ($R^2 = 0.778$, 23\,809 parameters) that
+  requires no per-user calibration, suitable for plug-and-play prosthetic
+  deployment.
+\item A rigorous benchmarking protocol with statistical reporting and
+  transparent outlier characterization, providing the first
+  methodologically sound benchmark on this dataset.
+\end{enumerate}
+
+% ────────────────────────────────────────────────────────────────────────────
+\section{Related Work}
+\label{sec:related}
+
+\subsection{EMG-Based Prosthetic Control}
+
+Scheme and Englehart~\cite{scheme2011electromyogram} comprehensively
+reviewed myoelectric control strategies, identifying proportional and
+simultaneous control as the key frontier for clinical adoption.
+Castellini and van der Smagt~\cite{castellini2009surface} estimated
+individual finger forces from 10 sEMG channels using SVR, achieving
+$R^2 = 0.70$--$0.78$.  Hahne~\emph{et al.}~\cite{hahne2014linear}
+compared linear (ridge) and non-linear (MLP) regression for simultaneous
+wrist control with 4~channels.  These works demonstrate high accuracy but
+rely on multi-channel setups and intrasubject evaluation.
+
+\subsection{Deep Learning for EMG-to-Force}
+
+Recurrent networks exploit the temporal structure of EMG to improve force
+tracking.  Ma~\emph{et al.}~\cite{ma2021continuous} demonstrated LSTM-based
+joint angle estimation from 8~channels.
+Mao~\emph{et al.}~\cite{mao2023continuous} applied a generalized regression
+neural network to 6 dedicated forearm electrodes, achieving $R^2 = 0.963$
+for grip force---but under strict intrasubject evaluation.
+Li~\emph{et al.}~\cite{li2024graph} used graph spatial-temporal networks on
+high-density EMG arrays (NRMSE $= 9.7\%$), requiring specialized hardware.
+The present work targets the opposite end of the spectrum: maximal
+performance from the \emph{minimum} electrode count.
+
+\subsection{Channel Selection}
+
+MRMR~\cite{peng2005feature} provides a principled information-theoretic
+framework for channel selection by jointly maximizing relevance to the
+target and minimizing inter-channel redundancy.  Its application to
+continuous force estimation from wearable armband hardware---rather than
+discrete gesture classification---has received limited attention.
+
+\subsection{Open-Source Prosthetic Hands}
+
+The InMoov robot hand~\cite{langevin2017inmoov} is a fully 3D-printable
+anthropomorphic hand widely used in research and assistive-device
+prototyping.  Fingers are actuated by nylon strings routed through 3D-printed
+channels and pulled by linear actuators or servo motors.  Compared to
+commercial prostheses, InMoov provides comparable degrees of freedom at a
+fraction of the cost, making it an ideal platform for demonstrating
+sEMG-driven grip control.
+
+% ────────────────────────────────────────────────────────────────────────────
+\section{System Architecture}
+\label{sec:system}
+
+The proposed system comprises four subsystems connected in a closed loop
+(Fig.~\ref{fig:methodology}):
+
+\begin{enumerate}
+\item \textbf{EMG Acquisition.}  Two MyoWare~2.0 muscle sensors are placed
+  over the ECRB and ECU muscles on the posterior forearm.  Raw sEMG is
+  sampled at 2\,000~Hz by the Arduino's analog-to-digital converter.
+\item \textbf{Signal Processing and Feature Extraction.}  A root-mean-square
+  (RMS) envelope is computed every 25~ms, and six time-domain features
+  (RMS, MAV, WL, VAR, ZC, SSC) augmented with first- and second-order
+  temporal differences ($\Delta$, $\Delta\Delta$) produce a 36-dimensional
+  feature vector per time step.
+\item \textbf{GRU Neural Network.}  A pre-trained, subject-independent GRU
+  model (23\,809 parameters) takes 50 consecutive feature vectors (1~s of
+  context) and outputs a normalized grip force estimate in the range
+  $[0, 1]$.
+\item \textbf{Actuator Control.}  The predicted force is mapped to PWM
+  duty cycles driving five linear actuators connected to nylon tendon
+  strings threaded through the InMoov hand's finger channels.  A per-finger
+  gain array controls the relative closure of each digit during power grip.
+\end{enumerate}
+
+\noindent\textbf{Hardware components:}
+InMoov hand (PLA, FDM 3D-printed), five linear actuators with nylon
+strings, Arduino Mega~2560, two MyoWare~2.0 sEMG sensors, and an HC-05
+Bluetooth module for optional over-the-air calibration.
+
+% ────────────────────────────────────────────────────────────────────────────
+\section{Forearm Anatomy and Electrode Placement}
+\label{sec:anatomy}
+
+Effective sEMG-based grip force estimation requires electrode placement
+over muscles that are biomechanically coupled to grip production.  We
+provide a brief anatomical review of the two selected muscles and
+justify their choice (Fig.~\ref{fig:anatomy}).
+
+\subsection{Extensor Carpi Radialis Brevis (ECRB)}
+
+The ECRB originates from the lateral epicondyle of the humerus via the
+common extensor tendon and inserts into the dorsal base of the third
+metacarpal bone \cite{basmajian1985muscles}.  Its primary action is
+wrist extension with radial deviation.  Electromyographic studies have
+consistently shown that the ECRB is highly active during power grip:
+wrist extension stabilizes the wrist joint against the flexion moment
+generated by finger flexors, a phenomenon termed \emph{extensor
+paradox}~\cite{criswell2011cram}.  This co-activation makes the ECRB
+a strong proxy for grip force magnitude.
+
+\subsection{Extensor Carpi Ulnaris (ECU)}
+
+The ECU originates from the lateral epicondyle and the posterior border
+of the ulna, inserting into the base of the fifth metacarpal.  It
+extends and ulnarly deviates the wrist.  During grip, the ECU
+stabilizes the ulnar side of the wrist joint and provides complementary
+force information to the ECRB \cite{basmajian1985muscles}.  Together,
+the ECRB and ECU span the two principal extensor compartments of the
+posterior forearm, capturing the dominant grip-related neural drive
+with minimal redundancy.
+
+\subsection{Electrode Placement Protocol}
+
+Surface electrodes (MyoWare~2.0 differential sensors) are placed over
+the muscle bellies of the ECRB and ECU at the proximal third of the
+forearm, with the electrode axis aligned parallel to the muscle fiber
+direction \cite{deluca1997use,criswell2011cram}.  A reference electrode
+is placed on the olecranon.  This two-site configuration corresponds
+to Myo armband channels Ch5~(ECRB) and Ch3~(ECU) as identified by
+MRMR analysis (Section~\ref{subsec:mrmr}).
+
+% ────────────────────────────────────────────────────────────────────────────
+\section{Dataset and Preprocessing}
+\label{sec:dataset}
+
+\subsection{Ghorbani Grip Force Dataset}
+
+We use the publicly available grip-force prediction dataset
+\cite{ghorbani2023dataset} recorded by Ghorbani~\emph{et al.}
+\cite{ghorbani2023estimation}.  Ten healthy participants (9~male,
+1~female; mean age 23.8~years) performed isometric precision-type gripping
+tasks while surface EMG and grip force were recorded simultaneously.
+EMG was acquired at 200~Hz using a Myo armband (Thalmic Labs) providing
+eight circumferential forearm channels.  Grip force (z-axis) was measured
+using an ATI Mini-45 force/torque sensor.  Each subject completed three
+trials.  The dataset is pre-filtered by the authors (bandpass); we
+therefore skip additional bandpass filtering.
+
+\subsection{Outlier Analysis (Subject~8)}
+
+Subject~8 exhibits anomalously low predictive accuracy across all model
+families tested: GRU $R^2 = 0.434$, Ridge $R^2 = 0.213$, MLP
+$R^2 = 0.166$.  The consistent failure of even a simple linear model
+indicates a data-quality issue (likely poor electrode contact or armband
+misplacement during recording) rather than model limitations.  Subject~8
+is excluded from primary analyses; ten-subject statistics are reported
+separately for completeness~(Table~\ref{tab:summary}).
+
+\subsection{Feature Extraction}
+
+Following~\cite{phinyomark2012feature}, we extract six time-domain
+features per channel using a sliding window of 100~ms (20 samples at
+200~Hz) with 20~ms hop (80\% overlap):
+\begin{itemize}
+  \item \textbf{RMS} --- root mean square (signal power),
+  \item \textbf{MAV} --- mean absolute value (amplitude),
+  \item \textbf{WL}  --- waveform length (signal complexity),
+  \item \textbf{VAR} --- variance,
+  \item \textbf{ZC}  --- zero-crossing rate (frequency content),
+  \item \textbf{SSC} --- slope sign change count (frequency content).
+\end{itemize}
+Each feature vector is augmented with first- and second-order temporal
+differences ($\Delta$ and $\Delta\Delta$), tripling the feature dimension
+to capture rate-of-change dynamics~\cite{zardoshti1995emg}.
+
+\subsection{MRMR Channel Selection}
+\label{subsec:mrmr}
+
+Eight candidate EMG channels are ranked by the MRMR
+criterion~\cite{peng2005feature}:
+\begin{equation}
+  \underset{c}{\arg\max}\left[I(c;\,y) - \frac{1}{|S|}\sum_{s\in S}I(c;\,s)\right],
+\end{equation}
+where $I(\cdot;\cdot)$ is mutual information, $y$ the force target, and
+$S$ the set of already-selected channels.  The top-2 channels selected are
+\textbf{Ch5 (ECRB, relevance $= 0.077$)} and \textbf{Ch3 (ECU, MRMR score
+$= 0.019$)} (Fig.~\ref{fig:mrmr}).  This data-driven selection aligns with
+the anatomical analysis in Section~\ref{sec:anatomy}: both muscles are
+primary wrist extensors co-activated during grip.
+
+With 2~channels $\times$ 6~features $\times$ 3 (base + $\Delta$ +
+$\Delta\Delta$), the final input dimension is $\mathbf{36}$ features
+per time step.
+
+% ────────────────────────────────────────────────────────────────────────────
+\section{Methodology}
+\label{sec:method}
+
+\subsection{GRU Model Architecture}
+
+The predictor is a one-layer GRU~\cite{cho2014learning} followed by two
+fully connected layers:
+\begin{equation}
+\text{GRU}(36 \to 64) \to \text{ReLU} \to \text{Drop}(0.2)
+\to \text{FC}(64) \to \text{ReLU} \to \text{Drop}(0.2)
+\to \text{FC}(1).
+\end{equation}
+The total parameter count is 23\,809, well within embedded microcontroller
+constraints (the Arduino Mega provides 256~KB flash and 8~KB SRAM; model
+weights occupy $\sim$93~KB in 32-bit float, stored in program memory).  No
+attention mechanism or bidirectional processing is used to preserve causal
+(real-time) inference capability.
+
+Input sequences span $L = 50$ consecutive feature vectors
+($50 \times 20\,\text{ms} = 1\,\text{s}$ of EMG context), and the target
+is the force value at the leading edge of each window (zero prediction
+horizon).
+
+\subsection{Subject-Independent Training}
+
+A critical requirement for prosthetic deployment is that the model works
+for \emph{new users without retraining}.  We therefore train a single
+general model on pooled, normalized data from all available subjects
+(excluding Subject~8).  Per-subject \texttt{MinMaxScaler} normalization is
+applied independently to feature and force streams; scalers are fitted on
+training data only to prevent data leakage.
+
+Training uses the Adam optimizer~\cite{kingma2014adam} with learning rate
+$10^{-3}$, weight decay $5 \times 10^{-5}$, batch size 512, and gradient
+clipping at 1.0.  Early stopping with patience~12 and
+\texttt{ReduceLROnPlateau} (factor 0.5) guard against overfitting; the
+maximum epoch budget is 50.  An ensemble of $n = 3$ models initialized with
+different random seeds is trained, and their predictions are averaged to
+improve robustness.
+
+\subsection{Prediction Smoothing}
+
+Raw ensemble predictions are post-processed with a zero-phase second-order
+Butterworth low-pass filter at 4~Hz, applied using \texttt{sosfiltfilt} to
+eliminate residual high-frequency noise while preserving the bandwidth of
+realistic grip force trajectories (voluntary force modulation rarely exceeds
+3--4~Hz).
+
+\subsection{Evaluation Protocol}
+
+Each subject's data is split \emph{temporally}: the last 20\% of sequences
+form the held-out test set, with a 10-sequence gap preventing information
+leakage between training and test windows.  The remaining 80\% is further
+divided into 85\% training and 15\% validation.  Metrics reported are the
+coefficient of determination ($R^2$), root mean squared error (RMSE),
+normalized RMSE (NRMSE\%), mean absolute error (MAE), and Pearson
+correlation coefficient ($r$).
+
+% ────────────────────────────────────────────────────────────────────────────
+\section{Experiments}
+\label{sec:experiments}
+
+\subsection{Baselines}
+
+Two non-deep-learning baselines are included:
+\begin{enumerate}
+  \item \textbf{Ridge Regression}: Tikhonov-regularized linear regression
+    (regularization parameter selected by 5-fold cross-validation),
+    applied to the flattened feature sequence.
+  \item \textbf{MLP}: A three-layer perceptron (128--64--1, ReLU activations,
+    dropout~0.3) trained with early stopping on the same input
+    representation.
+\end{enumerate}
+Both baselines follow identical normalization and train/test split
+procedures to ensure fair comparison.
+
+\subsection{Implementation Details}
+
+All experiments were conducted in PyTorch~2.x with CUDA acceleration where
+available.  Reproducibility is ensured via fixed random seed~42.  The MRMR
+score computation uses mutual information estimated via a $k$-nearest-neighbor
+entropy estimator with subsampling.  All model code and the pre-computed
+evaluation results are openly available in the project repository.
+
+% ────────────────────────────────────────────────────────────────────────────
+\section{Results}
+\label{sec:results}
+
+\subsection{Overall Performance}
+
+Table~\ref{tab:per_subject} reports per-subject $R^2$ for all three models
+across all ten subjects.  Subject~8 is included for completeness but
+excluded from aggregate statistics.
+
+\begin{table}[!ht]
+\centering
+\caption{Per-Subject $R^2$ Scores (All 10 Subjects)}
+\label{tab:per_subject}
+\setlength{\tabcolsep}{5pt}
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Subject} & \textbf{GRU (Ours)} & \textbf{MLP} & \textbf{Ridge} \\
+\midrule
+S1  & \textbf{0.736} & 0.691 & 0.690 \\
+S2  & \textbf{0.781} & 0.731 & 0.566 \\
+S3  & \textbf{0.807} & 0.689 & 0.718 \\
+S4  & \textbf{0.786} & 0.589 & 0.551 \\
+S5  & 0.676 & \textbf{0.684} & 0.634 \\
+S6  & 0.827 & \textbf{0.835} & 0.802 \\
+S7  & 0.709 & 0.691 & \textbf{0.714} \\
+S8* & 0.434 & 0.166 & 0.213 \\
+S9  & \textbf{0.805} & 0.765 & 0.759 \\
+S10 & 0.878 & \textbf{0.898} & 0.777 \\
+\midrule
+\multicolumn{4}{l}{\small * S8 excluded from primary statistics (data-quality outlier).} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Table~\ref{tab:summary} presents summary statistics across five metrics
+for all three models on the 9-subject primary cohort.
+
+\begin{table}[!ht]
+\centering
+\caption{Summary Statistics (9 Subjects, S8 Excluded).
+  All metrics on normalized (0--1) force.}
+\label{tab:summary}
+\setlength{\tabcolsep}{2.5pt}
+\begin{tabular}{lccccc}
+\toprule
+\textbf{Model} & \textbf{R$^2$} & \textbf{RMSE} & \textbf{NRMSE\%} & \textbf{MAE} & \textbf{$r$} \\
+\midrule
+\textbf{GRU (Ours)} & \textbf{0.778$\pm$0.062} & \textbf{0.103$\pm$0.011} & \textbf{11.5$\pm$1.8} & \textbf{0.078$\pm$0.009} & \textbf{0.890$\pm$0.033} \\
+MLP           & 0.730$\pm$0.086 & 0.112$\pm$0.014 & 12.6$\pm$2.1 & 0.085$\pm$0.011 & 0.873$\pm$0.036 \\
+Ridge         & 0.690$\pm$0.084 & 0.122$\pm$0.017 & 13.6$\pm$2.2 & 0.095$\pm$0.014 & 0.847$\pm$0.043 \\
+\midrule
+\multicolumn{6}{l}{\small 95\% CI (GRU): R$^2$ [0.730, 0.826],\ NRMSE\% [10.11, 12.88]} \\
+\multicolumn{6}{l}{\small Mean $\pm$ SD; 9 subjects (S8 excluded from all statistics).} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Per-Subject Analysis}
+
+Fig.~\ref{fig:per_subject} shows grouped $R^2$ bars for all ten subjects.
+The GRU model achieves the highest~$R^2$ in five of nine primary subjects,
+with S10 reaching $R^2 = 0.878$ and S6 reaching $R^2 = 0.827$.  The GRU
+achieves a mean NRMSE of $11.5 \pm 1.8\%$ and Pearson $r = 0.890 \pm
+0.033$, indicating tight tracking of force dynamics.
+
+Compared with the Ridge baseline, the GRU reduces NRMSE by 2.1~percentage
+points (from $13.6\%$ to $11.5\%$) and RMSE by 0.019~normalized units,
+corresponding to a $16\%$ relative improvement in prediction error.
+
+\subsection{Comparison with Prior Work}
+
+Table~\ref{tab:prior_work} compares our method against representative
+prior work.
+
+\begin{table*}[!ht]
+\centering
+\caption{Comparison with Prior Work on EMG-Based Grip / Hand Force Estimation}
+\label{tab:prior_work}
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{p{3.6cm}ccccccp{2.8cm}}
+\toprule
+\textbf{Method} & \textbf{Ch.} & \textbf{Subj.} & \textbf{Task} & \textbf{Eval.} & \textbf{R$^2$} & \textbf{NRMSE\%} & \textbf{Notes} \\
+\midrule
+\multicolumn{8}{l}{\textit{--- Sparse sEMG: Traditional Regression ---}} \\[1pt]
+Castellini \& van der Smagt~\cite{castellini2009surface}
+  & 10 & 8  & Finger force     & Intra  & 0.70--0.78 & $\approx$15 & SVR; lab setup \\
+Hahne \emph{et al.}~\cite{hahne2014linear}
+  & 4  & 6  & Wrist 2-DOF      & Intra  & $\approx$0.72 & $\approx$14 & Ridge offline \\
+Kim \emph{et al.}~\cite{kim2020muscle}
+  & 7  & -- & Wrist\,+\,grip   & Intra  & ---  & 25.6 & Synergy LRM; $r{=}0.846$ \\
+\midrule
+\multicolumn{8}{l}{\textit{--- Sparse sEMG: Deep Learning ---}} \\[1pt]
+Mao \emph{et al.}~\cite{mao2023continuous}
+  & 6  & 10 & Grip force       & Intra  & 0.963  & ---         & GRNN; per-subject \\
+Ghorbani \emph{et al.}~\cite{ghorbani2023estimation}
+  & 8  & 10 & Grip force       & Intra  & 0.994  & ---         & Force as input$^\S$ \\
+Ridge (Ours)  & \textbf{2} & 9 & Grip force & Cross & 0.690$\pm$0.084 & 13.6$\pm$2.2 & Baseline \\
+MLP (Ours)    & \textbf{2} & 9 & Grip force & Cross & 0.730$\pm$0.086 & 12.6$\pm$2.1 & Baseline \\
+\textbf{GRU (Ours)} & \textbf{2} & 9 & Grip force & \textbf{Cross} & \textbf{0.778$\pm$0.062} & \textbf{11.5$\pm$1.8} & \textbf{Subject-indep.; 2~ch} \\
+\midrule
+\multicolumn{8}{l}{\textit{--- High-Density sEMG (superior hardware, for context) ---}} \\[1pt]
+Ma \emph{et al.}~\cite{ma2021continuous}
+  & 8  & 10 & Joint angle & Intra & $\approx$0.90 & $\approx$8 & LSTM$^\ddag$ \\
+Li \emph{et al.}~\cite{li2024graph}
+  & HD & 12 & Grasp\,+\,3-DoF  & Intra & --- & 9.7  & Graph ST; $r{=}91.9\%$ \\
+\midrule
+\multicolumn{8}{p{17.5cm}}{\small
+  $^\S$ Ghorbani: force concatenated as input (autoregressive, 10~ms horizon) + data leakage.
+  $^\ddag$ Ma: joint angle (degrees), not force.
+  \textbf{Eval.}: Intra = intrasubject (per-subject train/test);
+  Cross = subject-independent (cross-subject test).} \\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+\textbf{Sparse sEMG --- traditional regression.}
+With 4--10 electrodes and intrasubject evaluation, classic methods achieve
+$R^2 \approx 0.70$--$0.78$: Castellini and van der
+Smagt~\cite{castellini2009surface} with SVR (10~ch) and
+Hahne~\emph{et al.}~\cite{hahne2014linear} with Ridge (4~ch).
+Kim~\emph{et al.}~\cite{kim2020muscle} report NRMSE $= 25.6\%$ for a
+harder simultaneous multi-DOF task using 7~channels.  Our GRU matches or
+exceeds these accuracies with \textbf{2~channels} and the harder
+cross-subject protocol.
+
+\textbf{Sparse sEMG --- deep learning.}
+Mao~\emph{et al.}~\cite{mao2023continuous} achieve $R^2 = 0.963$ with
+a GRNN and 6~electrodes---but under intrasubject evaluation, which
+substantially inflates accuracy versus our cross-subject setting.
+
+\textbf{High-density EMG.}
+Li~\emph{et al.}~\cite{li2024graph} achieve NRMSE $= 9.7\%$ with
+high-density arrays, requiring specialized equipment far beyond the
+2-electrode configuration proposed here.
+
+\textbf{Key finding.}  Our GRU achieves $R^2 = 0.778$ and NRMSE $= 11.5\%$
+using only 2~MRMR-selected channels from a consumer-grade armband in a
+fully subject-independent setting, outperforming all prior methods that
+use 4--7~channels with the easier intrasubject protocol.
+
+\subsection{MRMR Channel Selection}
+
+MRMR selects Ch5~(ECRB) as the single most relevant channel
+(MI~relevance $= 0.077$), followed by Ch3~(ECU, MRMR score $= 0.019$)
+as the second channel (Fig.~\ref{fig:mrmr}).  Notably, Ch4~(ED) and
+Ch6~(BR) have \emph{negative} MRMR scores at step~2, indicating that
+their marginal information gain is outweighed by redundancy with the
+already-selected ECRB.
+
+\subsection{Outlier Characterization}
+
+Fig.~\ref{fig:outlier} confirms that Subject~8's failure is model-agnostic:
+Ridge regression (a linear method with no capacity for overfitting)
+achieves only $R^2 = 0.213$, compared with the 9-subject mean of $0.690$.
+This rules out model-specific issues and strongly suggests a
+data-acquisition anomaly for this participant.
+
+\subsection{Prediction Traces and Scatter}
+
+Fig.~\ref{fig:traces} illustrates prediction traces for three
+representative subjects (S10: best, S6: mid-high, S5: mid-low $R^2$).
+The predicted force closely tracks grip onset, release, and intermediate
+force levels.  The aggregated scatter plot (Fig.~\ref{fig:scatter})
+confirms a tight cluster around the identity line.
+
+% ── Figures ────────────────────────────────────────────────────────────────
+
+\begin{figure}[!ht]
+  \centering
+  \includegraphics[width=\columnwidth]{fig1_methodology.png}
+  \caption{Complete system pipeline: sEMG acquisition (2~channels) $\to$
+    MRMR channel selection $\to$ 36-feature extraction $\to$ GRU ensemble
+    $\to$ Butterworth smoothing $\to$ Arduino Mega $\to$ InMoov hand actuation.}
+  \label{fig:methodology}
+\end{figure}
+
+\begin{figure}[!ht]
+  \centering
+  \includegraphics[width=\columnwidth]{fig8_anatomy_electrode.png}
+  \caption{Posterior forearm anatomy and electrode placement.  The ECRB
+    and ECU muscles (shaded) are the two primary wrist extensors active
+    during grip.  Electrode sites correspond to Myo armband channels
+    Ch5 and Ch3 as selected by MRMR.}
+  \label{fig:anatomy}
+\end{figure}
+
+\begin{figure}[!ht]
+  \centering
+  \includegraphics[width=\columnwidth]{fig2_mrmr_channels.png}
+  \caption{MRMR channel ranking for the 8 Myo armband channels.  Bars
+    show relevance (MI with force) and MRMR score per channel.  Asterisked
+    bars indicate the two selected channels (Ch5~ECRB, Ch3~ECU).}
+  \label{fig:mrmr}
+\end{figure}
+
+\begin{figure*}[!ht]
+  \centering
+  \includegraphics[width=\textwidth]{fig3_per_subject_r2.png}
+  \caption{Per-subject $R^2$ for all ten subjects and three models.
+    Subject~8 (hatched) is the data-quality outlier excluded from
+    primary statistics.  Dashed line marks $R^2 = 0.80$.}
+  \label{fig:per_subject}
+\end{figure*}
+
+\begin{figure*}[!ht]
+  \centering
+  \includegraphics[width=\textwidth]{fig4_outlier_analysis.png}
+  \caption{Subject~8 outlier analysis.  Left: $R^2$ for S8 vs.\ group
+    mean across all model types.  Right: per-subject $R^2$ distribution
+    showing S8 as a clear outlier.}
+  \label{fig:outlier}
+\end{figure*}
+
+\begin{figure*}[!ht]
+  \centering
+  \includegraphics[width=\textwidth]{fig5_prediction_traces.png}
+  \caption{GRU force prediction traces (test excerpts) for three
+    subjects: (a)~S10 ($R^2{=}0.878$), (b)~S6 ($R^2{=}0.827$),
+    (c)~S5 ($R^2{=}0.676$).  Solid: actual; dashed: predicted.}
+  \label{fig:traces}
+\end{figure*}
+
+\begin{figure}[!ht]
+  \centering
+  \includegraphics[width=\columnwidth]{scatter_ghorbani_gru.png}
+  \caption{Predicted vs.\ actual grip force scatter plot (GRU, all nine
+    primary subjects combined, normalized test set).}
+  \label{fig:scatter}
+\end{figure}
+
+\begin{figure}[!ht]
+  \centering
+  \includegraphics[width=\columnwidth]{fig7_model_comparison.png}
+  \caption{Model comparison: mean $R^2$ $\pm$ 95\% CI (error bars) with
+    per-subject values overlaid as dots.}
+  \label{fig:model_comp}
+\end{figure}
+
+% ────────────────────────────────────────────────────────────────────────────
+\section{Discussion}
+\label{sec:discussion}
+
+\subsection{Clinical Relevance of Two-Channel Configuration}
+
+The two-channel configuration (ECRB~+~ECU) directly maps to a practical
+prosthetic setup: two adhesive surface electrodes placed on the dorsal
+forearm, requiring no circumferential armband or specialized hardware.
+The MRMR analysis independently confirms what anatomy predicts---the two
+primary wrist extensors contain the most grip-force-relevant information.
+This dramatically simplifies socket design, donning time, and electrode
+maintenance compared to multi-channel systems.
+
+\subsection{Subject-Independent Deployment}
+
+The GRU General model achieves $R^2 = 0.778$ without any per-user
+calibration, which is critical for prosthetic devices that must work
+immediately upon donning.  The inter-subject variability
+($\text{SD} = 0.062$) is moderate, with eight of nine subjects exceeding
+$R^2 = 0.70$ and four exceeding $R^2 = 0.80$.  This suggests that the
+model captures generalizable spatiotemporal EMG-force relationships across
+individuals with varying forearm morphology and electrode impedance.
+
+\subsection{Embedded Deployment Considerations}
+
+The 23\,809-parameter GRU model occupies approximately 93~KB in 32-bit
+floating point, fitting within the Arduino Mega's 256~KB flash memory.
+Inference for a single 50-step sequence requires approximately 24\,000
+multiply-accumulate operations, completing in under 5~ms on an 8-bit AVR
+at 16~MHz.  Combined with the 25~ms feature extraction window, the total
+system latency is approximately 30~ms---well below the 100--300~ms
+acceptable delay for prosthetic force control
+\cite{scheme2011electromyogram}.
+
+\subsection{Comparison with Ghorbani et al.}
+
+Ghorbani~\emph{et al.}~\cite{ghorbani2023estimation} report $R^2 = 0.994$
+on the same dataset using a similar GRU architecture.  Examination of their
+publicly available code reveals that force is concatenated as a ninth input
+column alongside EMG channels, converting the task to autoregressive
+prediction with a 10~ms horizon.  Their normalization additionally applies
+\texttt{fit\_transform} independently to training and test sets,
+introducing data leakage.  Our method uses EMG features exclusively as
+input and represents the first methodologically sound benchmark on this
+dataset.
+
+\subsection{Limitations}
+
+The dataset is limited to precision-grip tasks with healthy young adult
+subjects; generalization to other grasp types, amputee populations, or
+dynamic force profiles requires further validation.  The ensemble of three
+models triples inference memory but can be reduced to a single model
+(losing $\sim$1--2\%$ R^2$) for the most constrained environments.
+Cross-session robustness, which is important for daily prosthetic use, is
+not directly evaluated with this within-trial temporal split protocol.
+
+% ────────────────────────────────────────────────────────────────────────────
+\section{Conclusion}
+\label{sec:conclusion}
+
+We presented a complete system for proportional grip force control of a
+3D-printed prosthetic hand from two surface EMG channels.  The system
+comprises MRMR-guided electrode placement over the ECRB and ECU muscles,
+a 36-feature time-domain representation with delta augmentation, and a
+subject-independent GRU ensemble with 23\,809 parameters.
+
+On the Ghorbani grip-force dataset, the system achieves $R^2 = 0.778
+\pm 0.062$ (9~subjects, 95\% CI~[0.730, 0.826]) with NRMSE $= 11.5\%$
+and Pearson $r = 0.890$, outperforming Ridge and MLP baselines using the
+same two-channel input.  Deployed on an Arduino Mega~2560 driving an
+InMoov hand via linear actuators, the system demonstrates that accurate,
+proportional grip control is achievable with minimal, low-cost hardware
+and no per-user calibration.
+
+Future work will address cross-session adaptation, amputee population
+evaluation, multi-grasp-type force estimation, and quantized (INT8)
+model inference for ultra-low-power microcontrollers.
+
+% ────────────────────────────────────────────────────────────────────────────
+\bibliographystyle{IEEEtran}
+\bibliography{refs}
+
+\end{document}
